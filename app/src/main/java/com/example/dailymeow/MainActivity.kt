@@ -73,18 +73,35 @@ fun DailyMeowApp() {
 
 @Composable
 fun BrowseScreen(navController: NavController) {
-    var catImages by remember { mutableStateOf<List<String>?>(null) }
+    var catImageUrl by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
+    val likesRepository = remember { LikesRepository(context) }
     val favoritesRepository = remember { FavoritesRepository(context) }
     val coroutineScope = rememberCoroutineScope()
 
-    LaunchedEffect(Unit) {
-        try {
-            val response = RetrofitInstance.api.getRandomCat() // Call the Cat API multiple times for browsing
-            catImages = response.map { it.url }
-        } catch (e: Exception) {
-            e.printStackTrace()
+    val likes = catImageUrl?.let { likesRepository.getLikes(it).collectAsState(initial = 0).value } ?: 0
+    val isLiked = catImageUrl?.let { likesRepository.isLiked(it).collectAsState(initial = false).value } ?: false
+    val isFavorite = catImageUrl?.let {
+        favoritesRepository.favorites.collectAsState(initial = emptySet()).value.contains(it)
+    } ?: false
+
+    // Fetch a random cat image
+    val fetchRandomCatImage: () -> Unit = {
+        coroutineScope.launch {
+            try {
+                val response = RetrofitInstance.api.getRandomCat()
+                if (response.isNotEmpty()) {
+                    catImageUrl = response[0].url
+                    likesRepository.ensureLikesInitialized(response[0].url)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
+    }
+
+    LaunchedEffect(Unit) {
+        fetchRandomCatImage()
     }
 
     Scaffold(
@@ -99,85 +116,77 @@ fun BrowseScreen(navController: NavController) {
             )
         },
         content = { padding ->
-            if (catImages == null) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator()
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding)
-                ) {
-                    items(catImages!!) { imageUrl ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(8.dp),
-                            elevation = CardDefaults.cardElevation()
-                        ) {
-                            Column {
-                                AsyncImage(
-                                    model = imageUrl,
-                                    contentDescription = "Cat Image",
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(300.dp)
-                                        .padding(8.dp)
-                                )
-                                Row(
-                                    horizontalArrangement = Arrangement.SpaceEvenly,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(8.dp)
-                                ) {
-                                    Button(onClick = {
-                                        coroutineScope.launch {
-                                            favoritesRepository.addFavorite(imageUrl)
-                                        }
-                                    }) {
-                                        Text("Favorite")
-                                    }
-                                    Button(onClick = {
-                                        navController.navigate("detail/${Uri.encode(imageUrl)}")
-                                    }) {
-                                        Text("View Details")
-                                    }
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                if (catImageUrl != null) {
+                    AsyncImage(
+                        model = catImageUrl,
+                        contentDescription = "Cat Image",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(300.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Likes: $likes")
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Button(onClick = {
+                            coroutineScope.launch {
+                                likesRepository.toggleLike(catImageUrl!!)
+                            }
+                        }) {
+                            Text(if (isLiked) "Unlike ($likes)" else "Like ($likes)")
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Button(onClick = {
+                            coroutineScope.launch {
+                                if (isFavorite) {
+                                    favoritesRepository.removeFavorite(catImageUrl!!)
+                                } else {
+                                    favoritesRepository.addFavorite(catImageUrl!!)
                                 }
                             }
+                        }) {
+                            Text(if (isFavorite) "Unfavorite" else "Favorite")
                         }
                     }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(onClick = { fetchRandomCatImage() }) {
+                        Text("Next")
+                    }
+                } else {
+                    CircularProgressIndicator()
                 }
             }
         }
     )
 }
 
-
 @Composable
 fun DetailScreen(navController: NavController, imageUrl: String) {
     val context = LocalContext.current
-    val favoritesRepository = remember { FavoritesRepository(context) }
     val likesRepository = remember { LikesRepository(context) }
+    val favoritesRepository = remember { FavoritesRepository(context) }
     val isFavorite = remember { mutableStateOf(false) }
-    val likesFlow = likesRepository.getLikes(imageUrl).collectAsState(initial = 0)
-    val likes = likesFlow.value
     val coroutineScope = rememberCoroutineScope()
 
-    if (imageUrl.isEmpty()) {
-        Text("Invalid image URL")
-        return
+    // Initialize likes immediately
+    LaunchedEffect(imageUrl) {
+        coroutineScope.launch {
+            likesRepository.ensureLikesInitialized(imageUrl)
+        }
     }
 
-    LaunchedEffect(Unit) {
-        val favorites = favoritesRepository.favorites.first()
-        isFavorite.value = imageUrl in favorites
-    }
+    val likes = likesRepository.getLikes(imageUrl).collectAsState(initial = 0).value
+    val isLiked = likesRepository.isLiked(imageUrl).collectAsState(initial = false).value
 
     Scaffold(
         topBar = {
@@ -206,17 +215,15 @@ fun DetailScreen(navController: NavController, imageUrl: String) {
                         .height(300.dp)
                 )
                 Spacer(modifier = Modifier.height(16.dp))
+                Text("Likes: $likes")
+                Spacer(modifier = Modifier.height(16.dp))
                 Row(
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Button(onClick = {
                         coroutineScope.launch {
-                            if (isFavorite.value) {
-                                favoritesRepository.removeFavorite(imageUrl)
-                            } else {
-                                favoritesRepository.addFavorite(imageUrl)
-                            }
+                            favoritesRepository.toggleFavorite(imageUrl)
                             isFavorite.value = !isFavorite.value
                         }
                     }) {
@@ -225,10 +232,10 @@ fun DetailScreen(navController: NavController, imageUrl: String) {
                     Spacer(modifier = Modifier.width(16.dp))
                     Button(onClick = {
                         coroutineScope.launch {
-                            likesRepository.incrementLikes(imageUrl)
+                            likesRepository.toggleLike(imageUrl)
                         }
                     }) {
-                        Text("Like ($likes)")
+                        Text(if (isLiked) "Unlike ($likes)" else "Like ($likes)")
                     }
                 }
             }
@@ -241,14 +248,25 @@ fun DetailScreen(navController: NavController, imageUrl: String) {
 fun HomeScreen(navController: NavController) {
     var catImageUrl by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
+    val likesRepository = remember { LikesRepository(context) }
     val favoritesRepository = remember { FavoritesRepository(context) }
     val coroutineScope = rememberCoroutineScope()
 
-    Button(onClick = { navController.navigate("browse") }) {
-        Text("Browse Cats")
+    // Get likes and favorite state
+    val likes = catImageUrl?.let { likesRepository.getLikes(it).collectAsState(initial = 0).value } ?: 0
+    val isLiked = catImageUrl?.let { likesRepository.isLiked(it).collectAsState(initial = false).value } ?: false
+    val isFavorite = catImageUrl?.let {
+        favoritesRepository.favorites.collectAsState(initial = emptySet()).value.contains(it)
+    } ?: false
+
+    // Ensure likes are initialized when the image URL changes
+    LaunchedEffect(catImageUrl) {
+        coroutineScope.launch {
+            catImageUrl?.let { likesRepository.ensureLikesInitialized(it) }
+        }
     }
 
-    // Fetch random cat image
+    // Fetch a random cat image from the API
     LaunchedEffect(Unit) {
         try {
             val response = RetrofitInstance.api.getRandomCat()
@@ -281,26 +299,58 @@ fun HomeScreen(navController: NavController) {
                             .height(300.dp)
                     )
                     Spacer(modifier = Modifier.height(16.dp))
-                    Button(onClick = {
-                        catImageUrl?.let { url ->
+                    Text("Likes: $likes")
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Button(onClick = {
                             coroutineScope.launch {
-                                favoritesRepository.addFavorite(url)
+                                likesRepository.toggleLike(catImageUrl!!)
                             }
+                        }) {
+                            Text(if (isLiked) "Unlike ($likes)" else "Like ($likes)")
                         }
-                    }) {
-                        Text("Favorite")
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Button(onClick = {
+                            coroutineScope.launch {
+                                if (isFavorite) {
+                                    favoritesRepository.removeFavorite(catImageUrl!!)
+                                } else {
+                                    favoritesRepository.addFavorite(catImageUrl!!)
+                                }
+                            }
+                        }) {
+                            Text(if (isFavorite) "Unfavorite" else "Favorite")
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Row(horizontalArrangement = Arrangement.SpaceEvenly) {
+                        Button(onClick = {
+                            navController.navigate("browse")
+                        }) {
+                            Text("Browse Cats")
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Button(onClick = {
+                            navController.navigate("favorites")
+                        }) {
+                            Text("Go to Favorites")
+                        }
                     }
                 } else {
                     CircularProgressIndicator()
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-                Button(onClick = { navController.navigate("favorites") }) {
-                    Text("Go to Favorites")
                 }
             }
         }
     )
 }
+
+
+
+
 @Composable
 fun FavoritesScreen(navController: NavController) {
     val context = LocalContext.current

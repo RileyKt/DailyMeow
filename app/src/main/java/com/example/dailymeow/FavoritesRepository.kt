@@ -8,8 +8,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
-// Define the DataStore
-private val Context.dataStore by preferencesDataStore("favorites")
+val Context.dataStore by preferencesDataStore("favorites")
 
 class FavoritesRepository(private val context: Context) {
     private val FAVORITES_KEY = stringSetPreferencesKey("favorites")
@@ -32,6 +31,18 @@ class FavoritesRepository(private val context: Context) {
         context.dataStore.edit { preferences ->
             val currentFavorites = preferences[FAVORITES_KEY] ?: emptySet()
             preferences[FAVORITES_KEY] = currentFavorites - imageUrl
+        }
+    }
+
+    // Toggle the favorite state of an image URL
+    suspend fun toggleFavorite(imageUrl: String) {
+        context.dataStore.edit { preferences ->
+            val currentFavorites = preferences[FAVORITES_KEY] ?: emptySet()
+            preferences[FAVORITES_KEY] = if (imageUrl in currentFavorites) {
+                currentFavorites - imageUrl
+            } else {
+                currentFavorites + imageUrl
+            }
         }
     }
 }
